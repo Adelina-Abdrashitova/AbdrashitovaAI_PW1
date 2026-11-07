@@ -1,0 +1,106 @@
+
+services:
+  # Брокер: через него идёт вся переписка приложений
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq-task1
+    ports:
+      - "5672:5672"      # AMQP — по этому порту подключаются приложения
+      - "15672:15672"    # веб-панель управления
+    environment:
+      # логин и пароль, с которыми приложения подключаются к брокеру
+      RABBITMQ_DEFAULT_USER: app
+      RABBITMQ_DEFAULT_PASS: app
+    healthcheck:
+      # проверяем, что брокер поднялся, прежде чем стартовать приложения
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Клиент: отправляет заявки и принимает сметы
+  client:
+    build: .
+    command: ["python", "-m", "app.client"]
+    environment:
+      # адрес брокера — имя сервиса внутри сети compose
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: app
+      RABBITMQ_PASS: app
+    depends_on:
+      # ждём, пока брокер пройдёт healthcheck
+      rabbitmq: {condition: service_healthy}
+    # restart не задан: повторный запуск отправил бы заявки заново
+
+  # Разделитель: одна заявка -> несколько работ
+  splitter:
+    build: .
+    command: ["python", "-m", "app.composite_message_handler.splitter"]
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: app
+      RABBITMQ_PASS: app
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    # слушающий сервис: поднимаем заново, если процесс упал
+    restart: unless-stopped
+
+  # Маршрутизатор: работа -> очередь своего исполнителя
+  router:
+    build: .
+    command: ["python", "-m", "app.composite_message_handler.router"]
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: app
+      RABBITMQ_PASS: app
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    restart: unless-stopped
+
+  # Исполнитель: бурение
+  drilling:
+    build: .
+    command: ["python", "-m", "app.drilling"]
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: app
+      RABBITMQ_PASS: app
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    restart: unless-stopped
+
+  # Исполнитель: электрика
+  electrical:
+    build: .
+    command: ["python", "-m", "app.electrical"]
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: app
+      RABBITMQ_PASS: app
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    restart: unless-stopped
+
+  # Исполнитель: логистика
+  logistics:
+    build: .
+    command: ["python", "-m", "app.logistics"]
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: app
+      RABBITMQ_PASS: app
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    restart: unless-stopped
+
+  # Агрегатор: все расчёты по заявке -> одна смета клиенту
+  aggregator:
+    build: .
+    command: ["python", "-m", "app.composite_message_handler.aggregator"]
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: app
+      RABBITMQ_PASS: app
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    restart: unless-stopped
